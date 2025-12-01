@@ -1,0 +1,127 @@
+services:
+
+  nginx-proxy:
+    image: nginx:stable-alpine3.21
+    container_name: nginx-proxy
+    ports:
+      - "3000:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - open-webui
+    networks:
+      - openwebui-network
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:0.6.28-cuda
+    container_name: open-webui
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@webui-postgres:5432/${OPENWEBUI_DB}
+      - WEBUI_SECRET_KEY=your-secret-key-here-change-this-in-production
+      - CORS_ALLOW_ORIGIN=*
+      - ENABLE_OPENAI_API=false
+      - CONTENT_EXTRACTION_ENGINE=tika
+      - TIKA_SERVER_URL=http://tika-server:9998
+      - TZ=Asia/Tokyo
+      - RAG_EMBEDDING_ENGINE=ollama
+      - RAG_EMBEDDING_MODEL=nomic-embed-text:latest
+      - ENABLE_EVALUATION_ARENA_MODELS=false
+      - ENABLE_CODE_INTERPRETER=false
+      - ENABLE_DIRECT_CONNECTIONS=false
+      - QDRANT_URI=http://webui-qdrant:6333
+      - VECTOR_DB=qdrant
+    volumes:
+      - open-webui-data:/app/backend/data
+    depends_on:
+      - ollama
+      - webui-postgres
+      - webui-qdrant
+    networks:
+      - openwebui-network
+      - internal-api-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/config"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama:0.12.3
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_DEBUG=DEBUG
+    networks:
+      - openwebui-network
+      - internal-api-network
+    restart: unless-stopped
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  tika:
+    image: apache/tika:3.2.3.0-full
+    container_name: tika
+    ports:
+      - "9998:9998"
+    networks:
+      - openwebui-network
+    restart: always
+
+  webui-postgres:
+    image: postgres:15-alpine3.22
+    container_name: webui-postgres
+    environment:
+      - TZ=Asia/Tokyo
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${OPENWEBUI_DB}
+      - POSTGRES_SHARED_BUFFERS=4096MB
+      - POSTGRES_MAX_CONNECTIONS=150
+      - POSTGRES_WORK_MEM=4MB
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - openwebui-network
+    restart: unless-stopped
+
+  webui-qdrant:
+    image: qdrant/qdrant:v1.15.4
+    container_name: webui-qdrant
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__LOG_LEVEL=INFO
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - openwebui-network
+    restart: unless-stopped
+
+networks:
+  openwebui-network:
+    driver: bridge
+  internal-api-network:
+    external: true
+
+volumes:
+  open-webui-data:
+  ollama-data:
+  postgres-data:
+  qdrant-data:
+
